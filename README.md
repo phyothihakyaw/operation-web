@@ -118,6 +118,17 @@ _Deploy your own copy with one click._
 
 Your app will be running at [http://localhost:3000](http://localhost:3000)
 
+### API configuration
+
+The app talks to the LearnWU API when `NEXT_PUBLIC_API_URL` is set (see `.env.example`):
+
+```bash
+cp .env.example .env.local
+# then set e.g. NEXT_PUBLIC_API_URL=https://api.dev.learnwu.com
+```
+
+When the variable is empty the app runs entirely on built-in sample data — login is simulated and the mentor vetting screen shows a "Sample data" badge. All endpoint paths and wire types live in `src/lib/api/` (`config.ts` holds the route map), so aligning to backend changes touches only that folder.
+
 ### Formatting and Linting
 
 Format, lint, and organize imports

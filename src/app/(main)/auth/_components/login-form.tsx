@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -9,6 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { login } from "@/lib/api/auth";
+import { ApiError } from "@/lib/api/client";
+import { isApiConfigured } from "@/lib/api/config";
 
 const formSchema = z.object({
   email: z.email({ message: "Please enter a valid email address." }),
@@ -16,17 +22,8 @@ const formSchema = z.object({
   remember: z.boolean().optional(),
 });
 
-function onSubmit(data: z.infer<typeof formSchema>) {
-  toast("You submitted the following values", {
-    description: (
-      <pre className="mt-2 w-[320px] rounded-md bg-neutral-950 p-4">
-        <code className="text-white">{JSON.stringify(data, null, 2)}</code>
-      </pre>
-    ),
-  });
-}
-
 export function LoginForm() {
+  const router = useRouter();
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -35,6 +32,25 @@ export function LoginForm() {
       remember: false,
     },
   });
+
+  async function onSubmit(data: z.infer<typeof formSchema>) {
+    if (!isApiConfigured) {
+      toast("Signed in with sample data", {
+        description: "Set NEXT_PUBLIC_API_URL to authenticate against the LearnWU API.",
+      });
+      router.push("/dashboard/default");
+      return;
+    }
+
+    try {
+      const { user } = await login({ email: data.email, password: data.password });
+      toast.success(`Welcome back${user?.name ? `, ${user.name}` : ""}!`);
+      router.push("/dashboard/default");
+    } catch (error) {
+      const description = error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
+      toast.error("Login failed", { description });
+    }
+  }
 
   return (
     <form noValidate onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4">
@@ -97,7 +113,8 @@ export function LoginForm() {
           )}
         />
       </FieldGroup>
-      <Button className="w-full" type="submit">
+      <Button className="w-full" type="submit" disabled={form.formState.isSubmitting}>
+        {form.formState.isSubmitting ? <Spinner /> : null}
         Login
       </Button>
     </form>

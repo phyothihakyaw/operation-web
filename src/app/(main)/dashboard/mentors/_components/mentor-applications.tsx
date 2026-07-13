@@ -20,6 +20,9 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ApiError } from "@/lib/api/client";
+import { isApiConfigured } from "@/lib/api/config";
+import { listInstructorApplications, reviewInstructorApplication } from "@/lib/api/instructors";
 import { cn, getInitials } from "@/lib/utils";
 
 import { ApplicationReviewSheet } from "./application-review-sheet";
@@ -63,6 +66,30 @@ export function MentorApplications({ initialApplications }: { initialApplication
   const [topicFilter, setTopicFilter] = React.useState("All");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [liveData, setLiveData] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!isApiConfigured) return;
+
+    let cancelled = false;
+    listInstructorApplications()
+      .then((loaded) => {
+        if (cancelled) return;
+        setApplications(loaded);
+        setLiveData(true);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const reason = error instanceof ApiError ? error.message : "Unexpected error.";
+        toast.error("Could not load applications from the API", {
+          description: `${reason} Showing sample data instead.`,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const topics = React.useMemo(
     () => ["All", ...new Set(applications.flatMap((application) => application.topics))],
@@ -103,6 +130,15 @@ export function MentorApplications({ initialApplications }: { initialApplication
           : application,
       ),
     );
+
+    if (liveData) {
+      reviewInstructorApplication(id, status, note).catch((error: unknown) => {
+        const reason = error instanceof ApiError ? error.message : "Unexpected error.";
+        toast.error("Could not save the decision to the API", {
+          description: `${reason} The change is only visible locally.`,
+        });
+      });
+    }
   }
 
   function quickDecision(application: MentorApplication, status: ApplicationStatus) {
@@ -118,7 +154,14 @@ export function MentorApplications({ initialApplications }: { initialApplication
     <>
       <Card>
         <CardHeader className="border-b has-data-[slot=card-action]:grid-cols-1 md:has-data-[slot=card-action]:grid-cols-[1fr_auto]">
-          <CardTitle className="text-xl leading-none">Mentor Applications</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-xl leading-none">
+            Mentor Applications
+            {!liveData ? (
+              <Badge variant="outline" className="font-normal text-muted-foreground">
+                Sample data
+              </Badge>
+            ) : null}
+          </CardTitle>
           <CardDescription className="max-w-sm leading-snug">
             Review mentor applications and decide who joins the program.
           </CardDescription>
