@@ -133,7 +133,7 @@ NEXT_PUBLIC_API_URL=/api/learnwu
 API_PROXY_TARGET=https://api.dev.learnwu.com
 ```
 
-The proxy route lives at `src/app/api/learnwu/[...path]/route.ts` and forwards method, body, and the `Authorization` header server-side. Alternatively, set `NEXT_PUBLIC_API_URL` to the absolute API URL for direct browser calls (requires the API's CORS policy to allow the app's origin).
+The proxy route lives at `src/app/api/learnwu/[...path]/route.ts`. Besides forwarding requests server-side, it keeps the access token in an `HttpOnly` cookie: on login it captures the token from the API response (stripping it from the JSON), on subsequent requests it injects the `Authorization: Bearer` header, and on logout it clears the cookie — so the token is never readable from client-side JavaScript. Alternatively, set `NEXT_PUBLIC_API_URL` to the absolute API URL for direct browser calls (requires the API's CORS policy to allow the app's origin; the token is then kept in localStorage).
 
 When both variables are empty the app runs entirely on built-in sample data — login is simulated and the mentor vetting screen shows a "Sample data" badge. All endpoint paths and wire types live in `src/lib/api/` (`config.ts` holds the route map), so aligning to backend changes touches only that folder.
 
