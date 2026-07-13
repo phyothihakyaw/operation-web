@@ -22,12 +22,19 @@ export type EducationEntry = {
   end: string;
 };
 
+export type AttachmentFileType = "pdf" | "docx" | "image";
+
 export type CertificateAttachment = {
   name: string;
   issuer: string;
   year: string;
   fileName: string;
   fileSize: string;
+  fileType: AttachmentFileType;
+  /** Original file, used for download. */
+  url: string;
+  /** Browser-renderable preview; for docx this is the server-converted PDF. Defaults to `url` for pdf/image. */
+  previewUrl?: string;
 };
 
 export type OpenSourceLink = {
@@ -146,13 +153,17 @@ export const mentorApplications: MentorApplication[] = [
         year: "2024",
         fileName: "aws-developer-associate.pdf",
         fileSize: "1.2 MB",
+        fileType: "pdf",
+        url: "/mock/attachments/aws-developer-associate.pdf",
       },
       {
         name: "Professional Scrum Master I",
         issuer: "Scrum.org",
         year: "2023",
-        fileName: "psm-1-certificate.pdf",
+        fileName: "psm-1-certificate.png",
         fileSize: "840 KB",
+        fileType: "image",
+        url: "/mock/attachments/psm-1-certificate.png",
       },
     ],
     openSource: [
@@ -219,6 +230,8 @@ export const mentorApplications: MentorApplication[] = [
         year: "2025",
         fileName: "cka-jonas-weber.pdf",
         fileSize: "980 KB",
+        fileType: "pdf",
+        url: "/mock/attachments/cka-jonas-weber.pdf",
       },
     ],
     openSource: [
@@ -280,13 +293,18 @@ export const mentorApplications: MentorApplication[] = [
         year: "2022",
         fileName: "tensorflow-developer.pdf",
         fileSize: "1.1 MB",
+        fileType: "pdf",
+        url: "/mock/attachments/tensorflow-developer.pdf",
       },
       {
         name: "Deep Learning Specialization",
         issuer: "DeepLearning.AI",
         year: "2021",
-        fileName: "dl-specialization.pdf",
+        fileName: "dl-specialization.docx",
         fileSize: "760 KB",
+        fileType: "docx",
+        url: "/mock/attachments/dl-specialization.docx",
+        previewUrl: "/mock/attachments/dl-specialization-preview.pdf",
       },
     ],
     openSource: [
@@ -405,6 +423,8 @@ export const mentorApplications: MentorApplication[] = [
         year: "2023",
         fileName: "fm-css-architecture.pdf",
         fileSize: "620 KB",
+        fileType: "pdf",
+        url: "/mock/attachments/fm-css-architecture.pdf",
       },
     ],
     openSource: [
@@ -466,13 +486,17 @@ export const mentorApplications: MentorApplication[] = [
         year: "2018",
         fileName: "oscp-priya-raman.pdf",
         fileSize: "1.4 MB",
+        fileType: "pdf",
+        url: "/mock/attachments/oscp-priya-raman.pdf",
       },
       {
         name: "CISSP",
         issuer: "ISC2",
         year: "2022",
-        fileName: "cissp-priya-raman.pdf",
+        fileName: "cissp-priya-raman.png",
         fileSize: "900 KB",
+        fileType: "image",
+        url: "/mock/attachments/cissp-priya-raman.png",
       },
     ],
     openSource: [
@@ -582,6 +606,8 @@ export const mentorApplications: MentorApplication[] = [
         year: "2024",
         fileName: "icf-acc-lindqvist.pdf",
         fileSize: "1.0 MB",
+        fileType: "pdf",
+        url: "/mock/attachments/icf-acc-lindqvist.pdf",
       },
     ],
     openSource: [

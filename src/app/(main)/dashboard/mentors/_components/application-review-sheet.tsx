@@ -9,6 +9,8 @@ import {
   Check,
   Download,
   ExternalLink,
+  Eye,
+  FileImage,
   FileText,
   FolderGit2,
   GraduationCap,
@@ -35,7 +37,8 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Textarea } from "@/components/ui/textarea";
 import { cn, getInitials } from "@/lib/utils";
 
-import { type ApplicationStatus, type MentorApplication, statusMeta } from "./data";
+import { AttachmentPreviewDialog, attachmentPreviewUrl } from "./attachment-preview-dialog";
+import { type ApplicationStatus, type CertificateAttachment, type MentorApplication, statusMeta } from "./data";
 
 function StatusBadge({ status }: { status: ApplicationStatus }) {
   const meta = statusMeta[status];
@@ -88,6 +91,8 @@ export function ApplicationReviewSheet({
 }) {
   const [rejectDialogOpen, setRejectDialogOpen] = React.useState(false);
   const [rejectReason, setRejectReason] = React.useState("");
+  const [previewAttachment, setPreviewAttachment] = React.useState<CertificateAttachment | null>(null);
+  const [previewOpen, setPreviewOpen] = React.useState(false);
 
   if (!application) return null;
 
@@ -114,6 +119,11 @@ export function ApplicationReviewSheet({
     toast(`${application.name}'s application rejected`, {
       description: "A notification email will be sent to the applicant. (mock)",
     });
+  }
+
+  function openPreview(attachment: CertificateAttachment) {
+    setPreviewAttachment(attachment);
+    setPreviewOpen(true);
   }
 
   function handleStartReview() {
@@ -223,25 +233,64 @@ export function ApplicationReviewSheet({
               <Section icon={Award} title="Certificates">
                 {application.certificates.length ? (
                   <div className="grid gap-2">
-                    {application.certificates.map((certificate) => (
-                      <div key={certificate.fileName} className="flex items-center gap-3 rounded-md border px-3 py-2.5">
-                        <FileText className="size-4 shrink-0 text-muted-foreground" />
-                        <div className="grid min-w-0 flex-1 gap-0.5">
+                    {application.certificates.map((certificate) => {
+                      const previewable = attachmentPreviewUrl(certificate) !== null;
+                      const CertificateIcon = certificate.fileType === "image" ? FileImage : FileText;
+
+                      const details = (
+                        <>
                           <span className="truncate font-medium text-sm">{certificate.name}</span>
                           <span className="truncate text-muted-foreground text-xs">
                             {certificate.issuer} · {certificate.year} · {certificate.fileSize}
                           </span>
-                        </div>
-                        <Button
-                          aria-label={`Download ${certificate.fileName}`}
-                          size="icon-sm"
-                          variant="ghost"
-                          className="text-muted-foreground"
+                        </>
+                      );
+
+                      return (
+                        <div
+                          key={certificate.fileName}
+                          className={cn(
+                            "flex items-center gap-3 rounded-md border px-3 py-2.5",
+                            previewable && "transition-colors hover:bg-muted/50",
+                          )}
                         >
-                          <Download />
-                        </Button>
-                      </div>
-                    ))}
+                          <CertificateIcon className="size-4 shrink-0 text-muted-foreground" />
+                          {previewable ? (
+                            <button
+                              type="button"
+                              className="grid min-w-0 flex-1 cursor-pointer gap-0.5 text-start hover:[&>span:first-child]:underline"
+                              onClick={() => openPreview(certificate)}
+                            >
+                              {details}
+                            </button>
+                          ) : (
+                            <div className="grid min-w-0 flex-1 gap-0.5">{details}</div>
+                          )}
+                          {previewable ? (
+                            <Button
+                              aria-label={`Preview ${certificate.fileName}`}
+                              size="icon-sm"
+                              variant="ghost"
+                              className="text-muted-foreground"
+                              onClick={() => openPreview(certificate)}
+                            >
+                              <Eye />
+                            </Button>
+                          ) : null}
+                          <Button
+                            aria-label={`Download ${certificate.fileName}`}
+                            size="icon-sm"
+                            variant="ghost"
+                            className="text-muted-foreground"
+                            asChild
+                          >
+                            <a href={certificate.url} download={certificate.fileName}>
+                              <Download />
+                            </a>
+                          </Button>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-muted-foreground text-sm">No certificates attached.</p>
@@ -342,6 +391,8 @@ export function ApplicationReviewSheet({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AttachmentPreviewDialog attachment={previewAttachment} open={previewOpen} onOpenChange={setPreviewOpen} />
     </>
   );
 }
