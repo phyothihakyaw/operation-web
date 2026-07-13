@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 import { apiRoutes, isApiConfigured } from "./config";
-import { clearAccessToken, getAccessToken, setAccessToken } from "./token.client";
+import { clearAccessToken, setAccessToken } from "./token.client";
 
 export type AuthUser = {
   id: string;
@@ -15,7 +15,12 @@ export type LoginPayload = {
 };
 
 export type LoginResponse = {
-  accessToken: string;
+  /**
+   * Only present in direct mode. In proxy mode (NEXT_PUBLIC_API_URL=/api/learnwu)
+   * the proxy moves the token into an HttpOnly cookie and strips it from the
+   * body, so it never reaches client-side JavaScript.
+   */
+  accessToken?: string;
   user: AuthUser;
 };
 
@@ -24,30 +29,34 @@ export async function login(payload: LoginPayload): Promise<LoginResponse> {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  setAccessToken(result.accessToken);
+  if (result.accessToken) {
+    setAccessToken(result.accessToken);
+  }
   return result;
 }
 
 /**
- * Ends the session server-side when possible, and always clears the local
- * token — signing out must never fail from the user's point of view.
+ * Ends the session server-side when possible (in proxy mode this also clears
+ * the HttpOnly session cookie), and always clears any locally stored token —
+ * signing out must never fail from the user's point of view.
  */
 export async function logout(): Promise<void> {
   try {
-    if (isApiConfigured && getAccessToken()) {
+    if (isApiConfigured) {
       await apiFetch<void>(apiRoutes.auth.logout, { method: "POST" });
     }
   } catch {
-    // best effort — the local token is cleared regardless
+    // best effort — local credentials are cleared regardless
   } finally {
     clearAccessToken();
   }
 }
 
+/**
+ * The session lives in an HttpOnly cookie the browser can't read, so this is
+ * the way to check auth state client-side: it succeeds with the profile when
+ * signed in and throws a 401 ApiError otherwise.
+ */
 export async function getCurrentUser(): Promise<AuthUser> {
   return apiFetch<AuthUser>(apiRoutes.auth.me);
-}
-
-export function isAuthenticated(): boolean {
-  return getAccessToken() !== null;
 }
