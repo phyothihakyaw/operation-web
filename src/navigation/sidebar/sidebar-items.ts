@@ -18,6 +18,7 @@ import {
   Server,
   ShoppingBag,
   SquareArrowUpRight,
+  UserCheck,
   Users,
 } from "lucide-react";
 
@@ -173,6 +174,13 @@ export const sidebarItems: NavGroup[] = [
         title: "Roles",
         url: "/dashboard/roles",
         icon: Lock,
+      },
+      {
+        id: "mentors",
+        title: "Mentor Vetting",
+        url: "/dashboard/mentors",
+        icon: UserCheck,
+        badge: "new",
       },
       {
         id: "authentication",

@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 
+import { useRouter } from "next/navigation";
+
 import { BadgeCheck, Bell, Check, CreditCard, LogOut } from "lucide-react";
+import { toast } from "sonner";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -13,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { logout } from "@/lib/api/auth";
 import { cn, getInitials } from "@/lib/utils";
 
 export function AccountSwitcher({
@@ -26,10 +30,17 @@ export function AccountSwitcher({
     readonly role: string;
   }>;
 }) {
+  const router = useRouter();
   const [activeUser, setActiveUser] = useState(users[0]);
 
   if (!activeUser) {
     return null;
+  }
+
+  async function handleLogout() {
+    await logout();
+    toast("You have been signed out");
+    router.push("/auth/v1/login");
   }
 
   return (
@@ -84,7 +95,7 @@ export function AccountSwitcher({
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>
+        <DropdownMenuItem onSelect={handleLogout}>
           <LogOut />
           Log out
         </DropdownMenuItem>
