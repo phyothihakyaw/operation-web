@@ -38,14 +38,14 @@ export function LoginForm() {
       toast("Signed in with sample data", {
         description: "Set NEXT_PUBLIC_API_URL to authenticate against the LearnWU API.",
       });
-      router.push("/dashboard/default");
+      router.push("/dashboard/mentors");
       return;
     }
 
     try {
       const { user } = await login({ email: data.email, password: data.password });
       toast.success(`Welcome back${user?.name ? `, ${user.name}` : ""}!`);
-      router.push("/dashboard/default");
+      router.push("/dashboard/mentors");
     } catch (error) {
       const description = error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
       toast.error("Login failed", { description });
