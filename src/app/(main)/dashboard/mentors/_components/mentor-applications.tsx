@@ -214,7 +214,6 @@ export function MentorApplications({ initialApplications }: { initialApplication
               <TableRow>
                 <TableHead className="py-4 font-normal">Applicant</TableHead>
                 <TableHead className="py-4 font-normal">Residency</TableHead>
-                <TableHead className="py-4 font-normal">Languages</TableHead>
                 <TableHead className="py-4 font-normal">Topics</TableHead>
                 <TableHead className="py-4 font-normal">Applied</TableHead>
                 <TableHead className="py-4 font-normal">Status</TableHead>
@@ -247,9 +246,6 @@ export function MentorApplications({ initialApplications }: { initialApplication
                           {application.residency.city} · {application.residency.timezone}
                         </span>
                       </div>
-                    </TableCell>
-                    <TableCell className="px-3 py-4 align-middle">
-                      <BadgeOverflowList values={application.languages.map(({ language }) => language)} />
                     </TableCell>
                     <TableCell className="px-3 py-4 align-middle">
                       <BadgeOverflowList values={application.topics} />
@@ -294,7 +290,7 @@ export function MentorApplications({ initialApplications }: { initialApplication
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                     No applications match the current filters.
                   </TableCell>
                 </TableRow>
