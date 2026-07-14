@@ -2,7 +2,6 @@
 
 import { Download, ExternalLink, FileImage, FileText } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,15 +12,25 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-import type { CertificateAttachment } from "./data";
+export type Attachment = {
+  name: string;
+  url: string;
+};
 
-export function attachmentPreviewUrl(attachment: CertificateAttachment): string | null {
-  if (attachment.fileType === "docx") return attachment.previewUrl ?? null;
-  return attachment.previewUrl ?? attachment.url;
+export type AttachmentKind = "image" | "pdf" | "other";
+
+/** The API stores bare document URLs; the renderable kind is derived from the file extension. */
+export function attachmentKind(url: string): AttachmentKind {
+  const path = (url.split(/[?#]/)[0] ?? "").toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|avif|svg)$/.test(path)) return "image";
+  if (path.endsWith(".pdf")) return "pdf";
+  return "other";
 }
 
-function PreviewBody({ attachment, previewUrl }: { attachment: CertificateAttachment; previewUrl: string | null }) {
-  if (!previewUrl) {
+function PreviewBody({ attachment }: { attachment: Attachment }) {
+  const kind = attachmentKind(attachment.url);
+
+  if (kind === "other") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
         <FileText className="size-8 text-muted-foreground" />
@@ -31,12 +40,12 @@ function PreviewBody({ attachment, previewUrl }: { attachment: CertificateAttach
     );
   }
 
-  if (attachment.fileType === "image") {
+  if (kind === "image") {
     return (
       <div className="flex h-full items-center justify-center overflow-auto p-6">
         {/* biome-ignore lint/performance/noImgElement: previews are user-uploaded files of unknown dimensions */}
         <img
-          src={previewUrl}
+          src={attachment.url}
           alt={`Preview of ${attachment.name}`}
           className="max-h-full max-w-full rounded-md border shadow-sm"
         />
@@ -44,7 +53,7 @@ function PreviewBody({ attachment, previewUrl }: { attachment: CertificateAttach
     );
   }
 
-  return <iframe src={previewUrl} title={`Preview of ${attachment.name}`} className="size-full border-0" />;
+  return <iframe src={attachment.url} title={`Preview of ${attachment.name}`} className="size-full border-0" />;
 }
 
 export function AttachmentPreviewDialog({
@@ -52,14 +61,14 @@ export function AttachmentPreviewDialog({
   open,
   onOpenChange,
 }: {
-  attachment: CertificateAttachment | null;
+  attachment: Attachment | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   if (!attachment) return null;
 
-  const previewUrl = attachmentPreviewUrl(attachment);
-  const FileIcon = attachment.fileType === "image" ? FileImage : FileText;
+  const kind = attachmentKind(attachment.url);
+  const FileIcon = kind === "image" ? FileImage : FileText;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -68,31 +77,22 @@ export function AttachmentPreviewDialog({
           <DialogTitle className="flex flex-wrap items-center gap-2 pe-6 text-base">
             <FileIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="truncate">{attachment.name}</span>
-            {attachment.fileType === "docx" ? (
-              <Badge variant="secondary" className="font-normal">
-                Converted preview
-              </Badge>
-            ) : null}
           </DialogTitle>
-          <DialogDescription>
-            {attachment.fileName} · {attachment.issuer} · {attachment.year} · {attachment.fileSize}
-          </DialogDescription>
+          <DialogDescription className="truncate">Supporting document</DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-hidden bg-muted/30">
-          <PreviewBody attachment={attachment} previewUrl={previewUrl} />
+          <PreviewBody attachment={attachment} />
         </div>
 
         <DialogFooter className="flex-row justify-end gap-2 border-t px-6 py-4">
-          {previewUrl ? (
-            <Button variant="outline" asChild>
-              <a href={previewUrl} target="_blank" rel="noreferrer">
-                <ExternalLink /> Open in new tab
-              </a>
-            </Button>
-          ) : null}
+          <Button variant="outline" asChild>
+            <a href={attachment.url} target="_blank" rel="noreferrer">
+              <ExternalLink /> Open in new tab
+            </a>
+          </Button>
           <Button asChild>
-            <a href={attachment.url} download={attachment.fileName}>
+            <a href={attachment.url} download>
               <Download /> Download
             </a>
           </Button>

@@ -1,0 +1,3525 @@
+openapi: 3.0.0
+
+info:
+  title: Learnwu API
+  version: 0.3.0
+  description: |
+    API contract for Learnwu.
+
+    Notes:
+    - Public endpoints are versioned under /v1.
+    - The only auth mechanism is the HttpOnly `access_token` cookie.
+    - Access tokens are backed by persisted server-side sessions and can be revoked before JWT expiry.
+    - Cookie auth is same-site only in the current deployment model (`SameSite=Strict`).
+    - CSRF tokens are not implemented in this repo today; add them before introducing cross-site browser requests with cookie auth.
+    - In local development, this spec is served at GET /openapi.yaml and Swagger UI at GET /docs.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.dev.learnwu.com
+    description: Dev environment
+
+tags:
+  - name: System
+    description: Health and operational endpoints.
+  - name: Auth
+    description: Registration, email verification, login, logout, and OAuth.
+  - name: Catalog
+    description: Shared read-only master data -- course categories/topics and reference data (languages, countries, timezones).
+  - name: Instructor Onboarding
+    description: Instructor onboarding draft and submission endpoints.
+  - name: Instructor Directory
+    description: Public discovery of verified instructors.
+  - name: Instructor Availability
+    description: |
+      Live, ongoing-editable weekly availability template for approved instructors.
+      Separate from the onboarding availability draft (Instructor Onboarding tag),
+      which is locked once an application enters review and is only ever a
+      one-time seed for this template on approval.
+  - name: Admin
+    description: Admin-only endpoints for reviewing instructor applications and platform-wide settings.
+  - name: Webhooks
+    description: Inbound webhooks from third-party providers. Not cookie-authenticated -- verified by provider signature instead.
+
+paths:
+  /livez:
+    get:
+      tags: [System]
+      summary: Liveness check
+      description: Returns 200 when the API process is running.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                ok:
+                  summary: Live
+                  value:
+                    status: ok
+
+  /readyz:
+    get:
+      tags: [System]
+      summary: Readiness check
+      description: Returns 200 when the API and required dependencies are ready to serve traffic.
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              examples:
+                ready:
+                  summary: Database ready
+                  value:
+                    status: ok
+                    checks:
+                      db: ok
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                dbNotReady:
+                  summary: Database not ready
+                  value:
+                    error:
+                      code: NOT_READY
+                      message: database not ready
+                      details:
+                        check: db
+
+  /metrics:
+    get:
+      tags: [System]
+      summary: Metrics endpoint
+      description: |
+        Returns in-process HTTP metrics in Prometheus text exposition format.
+
+        Outside `dev` and `test`, this endpoint requires `Authorization: Bearer <HTTP_METRICS_BEARER_TOKEN>`.
+      responses:
+        "200":
+          description: Metrics payload
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          description: Missing or invalid metrics bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/auth/register/learner:
+    post:
+      tags: [Auth]
+      summary: Register learner (email/password)
+      description: |
+        Creates a user account and sends an email verification link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            examples:
+              learner:
+                summary: Learner registration
+                value:
+                  email: alice@example.com
+                  password: correct-horse-battery-staple
+      responses:
+        "202":
+          description: Account created; email verification required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                verificationRequired:
+                  summary: Verification required
+                  value:
+                    status: verification_required
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidJson:
+                  summary: Malformed JSON
+                  value:
+                    error:
+                      code: INVALID_JSON
+                      message: invalid json
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidEmail:
+                  summary: Invalid email
+                  value:
+                    error:
+                      code: INVALID_EMAIL
+                      message: invalid email
+                passwordTooShort:
+                  summary: Password too short
+                  value:
+                    error:
+                      code: PASSWORD_TOO_SHORT
+                      message: password too short
+        "409":
+          description: Duplicate or account type mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                emailAlreadyRegistered:
+                  summary: Email already registered
+                  value:
+                    error:
+                      code: EMAIL_ALREADY_REGISTERED
+                      message: An account with this email already exists. Please sign in instead.
+                accountTypeMismatch:
+                  summary: Existing email with different account type
+                  value:
+                    error:
+                      code: ACCOUNT_TYPE_MISMATCH
+                      message: This email is already registered for a different account type.
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                registrationFailed:
+                  summary: Registration failed
+                  value:
+                    error:
+                      code: REGISTRATION_FAILED
+                      message: registration failed
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/register/instructor:
+    post:
+      tags: [Auth]
+      summary: Register instructor (email/password)
+      description: |
+        Creates a user account and sends an email verification link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            examples:
+              instructor:
+                summary: Instructor registration
+                value:
+                  email: instructor@example.com
+                  password: correct-horse-battery-staple
+      responses:
+        "202":
+          description: Account created; email verification required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                verificationRequired:
+                  summary: Verification required
+                  value:
+                    status: verification_required
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidJson:
+                  summary: Malformed JSON
+                  value:
+                    error:
+                      code: INVALID_JSON
+                      message: invalid json
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidEmail:
+                  summary: Invalid email
+                  value:
+                    error:
+                      code: INVALID_EMAIL
+                      message: invalid email
+                passwordTooShort:
+                  summary: Password too short
+                  value:
+                    error:
+                      code: PASSWORD_TOO_SHORT
+                      message: password too short
+        "409":
+          description: Duplicate or account type mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                emailAlreadyRegistered:
+                  summary: Email already registered
+                  value:
+                    error:
+                      code: EMAIL_ALREADY_REGISTERED
+                      message: An account with this email already exists. Please sign in instead.
+                accountTypeMismatch:
+                  summary: Existing email with different account type
+                  value:
+                    error:
+                      code: ACCOUNT_TYPE_MISMATCH
+                      message: This email is already registered for a different account type.
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                registrationFailed:
+                  summary: Registration failed
+                  value:
+                    error:
+                      code: REGISTRATION_FAILED
+                      message: registration failed
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/verify-email:
+    get:
+      tags: [Auth]
+      summary: Verify email (link)
+      description: |
+        Consumes a one-time verification token passed as a query parameter.
+
+        If `AUTH_VERIFY_EMAIL_REDIRECT_URL` is configured, success redirects the browser to that URL.
+      parameters:
+        - in: query
+          name: token
+          required: true
+          description: Verification token from the email link.
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Verified and redirected to configured login page
+          headers:
+            Location:
+              description: Configured `AUTH_VERIFY_EMAIL_REDIRECT_URL` value.
+              schema:
+                type: string
+                format: uri
+        "204":
+          description: Verified (no redirect configured)
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidOrExpired:
+                  summary: Invalid or expired token
+                  value:
+                    error:
+                      code: INVALID_OR_EXPIRED_TOKEN
+                      message: invalid or expired token
+        "409":
+          description: Token already used
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                alreadyUsed:
+                  summary: Token already used
+                  value:
+                    error:
+                      code: TOKEN_ALREADY_USED
+                      message: token already used
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                verificationFailed:
+                  summary: Verification failed
+                  value:
+                    error:
+                      code: VERIFICATION_FAILED
+                      message: verification failed
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+    post:
+      tags: [Auth]
+      summary: Verify email (token)
+      description: Consumes a one-time verification token passed in the JSON body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyEmailRequest"
+            examples:
+              token:
+                summary: Verify token
+                value:
+                  token: "<token>"
+      responses:
+        "204":
+          description: Verified
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidOrExpired:
+                  summary: Invalid or expired token
+                  value:
+                    error:
+                      code: INVALID_OR_EXPIRED_TOKEN
+                      message: invalid or expired token
+        "409":
+          description: Token already used
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                alreadyUsed:
+                  summary: Token already used
+                  value:
+                    error:
+                      code: TOKEN_ALREADY_USED
+                      message: token already used
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                verificationFailed:
+                  summary: Verification failed
+                  value:
+                    error:
+                      code: VERIFICATION_FAILED
+                      message: verification failed
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/resend-verification:
+    post:
+      tags: [Auth]
+      summary: Resend verification email
+      description: |
+        Shared learner/instructor endpoint.
+
+        Resends an email verification link for unverified learner or instructor accounts.
+
+        Always returns 202 for a valid JSON body when the email is unknown or the account is already verified. This avoids leaking account state.
+
+        An account/email can request at most 3 verification resends per hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResendVerificationRequest"
+            examples:
+              resend:
+                summary: Resend verification
+                value:
+                  email: alice@example.com
+      responses:
+        "202":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                ok:
+                  summary: Accepted
+                  value:
+                    status: ok
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidJson:
+                  summary: Malformed JSON
+                  value:
+                    error:
+                      code: INVALID_JSON
+                      message: invalid json
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  summary: Too many resend attempts
+                  value:
+                    error:
+                      code: RATE_LIMITED
+                      message: rate limit exceeded
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login (email/password)
+      description: |
+        Logs in a learner or instructor account, creates a persisted server-side session, and
+        sets an HttpOnly `access_token` cookie. One endpoint serves both personas -- the
+        response's `account_type` tells the frontend which persona this account is, so it can
+        redirect accordingly without a separate `/me` round-trip.
+
+        The response also includes `verified` so the frontend can block booking for unverified
+        learners while still allowing browsing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            examples:
+              login:
+                summary: Login
+                value:
+                  email: alice@example.com
+                  password: correct-horse-battery-staple
+      responses:
+        "200":
+          description: OK
+          headers:
+            Set-Cookie:
+              description: HttpOnly `access_token` cookie.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+              examples:
+                ok:
+                  summary: Logged in
+                  value:
+                    status: ok
+                    verified: true
+                    account_type: learner
+                    access_role: user
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCredentials:
+                  summary: Invalid credentials
+                  value:
+                    error:
+                      code: INVALID_CREDENTIALS
+                      message: invalid credentials
+        "403":
+          description: User disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                userDisabled:
+                  summary: User disabled
+                  value:
+                    error:
+                      code: USER_DISABLED
+                      message: user disabled
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                loginFailed:
+                  summary: Login failed
+                  value:
+                    error:
+                      code: LOGIN_FAILED
+                      message: login failed
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/login/admin:
+    post:
+      tags: [Auth]
+      summary: Login (admin)
+      description: |
+        Login endpoint for admin accounts, kept on its own path so admin-specific policies
+        (rate limiting, lockout, alerting) can diverge from the learner/instructor login flow
+        without touching it.
+
+        Learner and instructor accounts log in via `POST /v1/auth/login` instead.
+
+        Creates a persisted server-side session and sets an HttpOnly `access_token` cookie.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            examples:
+              login:
+                summary: Login
+                value:
+                  email: alice@example.com
+                  password: correct-horse-battery-staple
+      responses:
+        "200":
+          description: OK
+          headers:
+            Set-Cookie:
+              description: HttpOnly `access_token` cookie.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+              examples:
+                ok:
+                  summary: Logged in
+                  value:
+                    status: ok
+                    verified: true
+                    account_type: ""
+                    access_role: admin
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCredentials:
+                  summary: Invalid credentials
+                  value:
+                    error:
+                      code: INVALID_CREDENTIALS
+                      message: invalid credentials
+        "403":
+          description: User disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                userDisabled:
+                  summary: User disabled
+                  value:
+                    error:
+                      code: USER_DISABLED
+                      message: user disabled
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                loginFailed:
+                  summary: Login failed
+                  value:
+                    error:
+                      code: LOGIN_FAILED
+                      message: login failed
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout
+      description: Revokes the current persisted server-side session and clears the HttpOnly `access_token` cookie.
+      responses:
+        "200":
+          description: OK
+          headers:
+            Set-Cookie:
+              description: Expires the HttpOnly `access_token` cookie.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                ok:
+                  summary: Logged out
+                  value:
+                    status: ok
+
+  /v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the authenticated user's profile
+      description: |
+        Returns identity fields common to both learner and instructor accounts. Role-specific
+        profile data (e.g. instructor application/onboarding fields) lives under its own
+        `/v1/instructor/...` endpoints.
+      security:
+        - CookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid session
+                  value:
+                    error:
+                      code: UNAUTHORIZED
+                      message: unauthorized
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+    patch:
+      tags: [Auth]
+      summary: Set the authenticated user's first/last name
+      description: |
+        Writes directly to `users.first_name`/`users.last_name` -- the single source of truth
+        for a user's name across the product (OAuth providers populate it at signup; this is
+        how email/password accounts, which don't collect a name at registration, set or correct
+        it later). Instructor onboarding and directory listings read the name via this table
+        rather than storing their own copy.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMeRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidName:
+                  summary: Missing first or last name
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: first name and last name are required
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/oauth/google/start:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth
+      description: Redirects to Google for authentication using a one-time stored state token and PKCE.
+      parameters:
+        - in: query
+          name: account_type
+          required: true
+          description: Desired account type (`learner` or `instructor`).
+          schema:
+            $ref: "#/components/schemas/AccountType"
+      responses:
+        "302":
+          description: Redirect to Google
+          headers:
+            Location:
+              description: Google authorization URL.
+              schema:
+                type: string
+                format: uri
+        "422":
+          description: Invalid account type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidAccountType:
+                  summary: Invalid account type
+                  value:
+                    error:
+                      code: INVALID_ACCOUNT_TYPE
+                      message: invalid account type
+        "500":
+          description: Failed to start OAuth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                failed:
+                  summary: Failed to start OAuth
+                  value:
+                    error:
+                      code: OAUTH_START_FAILED
+                      message: failed to start oauth
+        "501":
+          description: Not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  summary: Not configured
+                  value:
+                    error:
+                      code: OAUTH_NOT_CONFIGURED
+                      message: google oauth not configured
+
+  /v1/auth/oauth/google/callback:
+    get:
+      tags: [Auth]
+      summary: Google OAuth callback
+      description: Validates the stored OAuth state, exchanges the OAuth code with PKCE, sets an HttpOnly `access_token` cookie, and redirects the browser to the frontend login page with role and environment context.
+      parameters:
+        - in: query
+          name: state
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Redirect to the frontend login page after a successful callback.
+          headers:
+            Location:
+              description: Frontend login URL with `role` and `env` query parameters.
+              schema:
+                type: string
+                format: uri-reference
+            Set-Cookie:
+              description: HttpOnly `access_token` cookie.
+              schema:
+                type: string
+        "400":
+          description: Callback error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidState:
+                  summary: Invalid state
+                  value:
+                    error:
+                      code: INVALID_OAUTH_STATE
+                      message: invalid state
+                authorizationFailed:
+                  summary: OAuth authorization failed
+                  value:
+                    error:
+                      code: OAUTH_AUTHORIZATION_FAILED
+                      message: oauth authorization failed
+                missingCode:
+                  summary: Missing code
+                  value:
+                    error:
+                      code: MISSING_OAUTH_CODE
+                      message: missing code
+                exchangeFailed:
+                  summary: OAuth exchange failed
+                  value:
+                    error:
+                      code: OAUTH_EXCHANGE_FAILED
+                      message: oauth exchange failed
+                missingIdToken:
+                  summary: Missing id_token
+                  value:
+                    error:
+                      code: MISSING_ID_TOKEN
+                      message: missing id_token
+                invalidClaims:
+                  summary: Invalid claims
+                  value:
+                    error:
+                      code: INVALID_OAUTH_CLAIMS
+                      message: invalid claims
+                missingEmail:
+                  summary: Missing email
+                  value:
+                    error:
+                      code: MISSING_OAUTH_EMAIL
+                      message: missing email
+        "401":
+          description: Invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidIdToken:
+                  summary: Invalid id_token
+                  value:
+                    error:
+                      code: INVALID_ID_TOKEN
+                      message: invalid id_token
+        "403":
+          description: Email not verified with provider or user disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                providerEmailNotVerified:
+                  summary: Provider email not verified
+                  value:
+                    error:
+                      code: EMAIL_NOT_VERIFIED
+                      message: email not verified
+                userDisabled:
+                  summary: User disabled
+                  value:
+                    error:
+                      code: USER_DISABLED
+                      message: user disabled
+        "409":
+          description: Duplicate or account type mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                emailAlreadyRegistered:
+                  summary: Email already registered
+                  value:
+                    error:
+                      code: EMAIL_ALREADY_REGISTERED
+                      message: An account with this email already exists. Please sign in instead.
+                accountTypeMismatch:
+                  summary: Existing email with different account type
+                  value:
+                    error:
+                      code: ACCOUNT_TYPE_MISMATCH
+                      message: This email is already registered for a different account type.
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                oauthLoginFailed:
+                  summary: OAuth login failed
+                  value:
+                    error:
+                      code: OAUTH_LOGIN_FAILED
+                      message: oauth login failed
+        "501":
+          description: Not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  summary: Not configured
+                  value:
+                    error:
+                      code: OAUTH_NOT_CONFIGURED
+                      message: google oauth not configured
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/auth/oauth/linkedin/start:
+    get:
+      tags: [Auth]
+      summary: Start LinkedIn OAuth
+      description: Redirects to LinkedIn for authentication using a one-time stored state token and PKCE.
+      parameters:
+        - in: query
+          name: account_type
+          required: true
+          description: Desired account type (`learner` or `instructor`).
+          schema:
+            $ref: "#/components/schemas/AccountType"
+      responses:
+        "302":
+          description: Redirect to LinkedIn
+          headers:
+            Location:
+              description: LinkedIn authorization URL.
+              schema:
+                type: string
+                format: uri
+        "422":
+          description: Invalid account type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidAccountType:
+                  summary: Invalid account type
+                  value:
+                    error:
+                      code: INVALID_ACCOUNT_TYPE
+                      message: invalid account type
+        "500":
+          description: Failed to start OAuth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                failed:
+                  summary: Failed to start OAuth
+                  value:
+                    error:
+                      code: OAUTH_START_FAILED
+                      message: failed to start oauth
+        "501":
+          description: Not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  summary: Not configured
+                  value:
+                    error:
+                      code: OAUTH_NOT_CONFIGURED
+                      message: linkedin oauth not configured
+
+  /v1/auth/oauth/linkedin/callback:
+    get:
+      tags: [Auth]
+      summary: LinkedIn OAuth callback
+      description: Validates the stored OAuth state, exchanges the OAuth code with PKCE, sets an HttpOnly `access_token` cookie, and redirects the browser to the frontend login page with role and environment context.
+      parameters:
+        - in: query
+          name: state
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Redirect to the frontend login page after a successful callback.
+          headers:
+            Location:
+              description: Frontend login URL with `role` and `env` query parameters.
+              schema:
+                type: string
+                format: uri-reference
+            Set-Cookie:
+              description: HttpOnly `access_token` cookie.
+              schema:
+                type: string
+        "400":
+          description: Callback error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidState:
+                  summary: Invalid state
+                  value:
+                    error:
+                      code: INVALID_OAUTH_STATE
+                      message: invalid state
+                authorizationFailed:
+                  summary: OAuth authorization failed
+                  value:
+                    error:
+                      code: OAUTH_AUTHORIZATION_FAILED
+                      message: oauth authorization failed
+                missingCode:
+                  summary: Missing code
+                  value:
+                    error:
+                      code: MISSING_OAUTH_CODE
+                      message: missing code
+                exchangeFailed:
+                  summary: OAuth exchange failed
+                  value:
+                    error:
+                      code: OAUTH_EXCHANGE_FAILED
+                      message: oauth exchange failed
+                userinfoFailed:
+                  summary: Failed to fetch userinfo
+                  value:
+                    error:
+                      code: OAUTH_USERINFO_FAILED
+                      message: failed to fetch userinfo
+        "403":
+          description: Email not verified with provider or user disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                providerEmailNotVerified:
+                  summary: Provider email not verified
+                  value:
+                    error:
+                      code: EMAIL_NOT_VERIFIED
+                      message: email not verified
+                userDisabled:
+                  summary: User disabled
+                  value:
+                    error:
+                      code: USER_DISABLED
+                      message: user disabled
+        "409":
+          description: Duplicate or account type mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                emailAlreadyRegistered:
+                  summary: Email already registered
+                  value:
+                    error:
+                      code: EMAIL_ALREADY_REGISTERED
+                      message: An account with this email already exists. Please sign in instead.
+                accountTypeMismatch:
+                  summary: Existing email with different account type
+                  value:
+                    error:
+                      code: ACCOUNT_TYPE_MISMATCH
+                      message: This email is already registered for a different account type.
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                oauthLoginFailed:
+                  summary: OAuth login failed
+                  value:
+                    error:
+                      code: OAUTH_LOGIN_FAILED
+                      message: oauth login failed
+        "501":
+          description: Not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  summary: Not configured
+                  value:
+                    error:
+                      code: OAUTH_NOT_CONFIGURED
+                      message: linkedin oauth not configured
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/catalog/categories:
+    get:
+      tags:
+        - Catalog
+      summary: List categories and topics
+      description: Returns the seeded categories with their topics. Supports optional filtering by category or topic title or slug with the `q` query parameter.
+      parameters:
+        - in: query
+          name: q
+          required: false
+          description: Optional case-insensitive text filter applied to category/topic titles and slugs.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Categories with nested topics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryListResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/reference/languages:
+    get:
+      tags:
+        - Catalog
+      summary: List languages
+      description: Returns the seeded ISO 639-1 languages used to validate and populate `taught_languages` elsewhere in the API.
+      responses:
+        "200":
+          description: Languages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LanguageListResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/reference/countries:
+    get:
+      tags:
+        - Catalog
+      summary: List countries
+      description: Returns the seeded ISO 3166-1 countries, each with its E.164 dial code(s), used to validate and populate `country_of_residence` and `phone_country_code` elsewhere in the API.
+      responses:
+        "200":
+          description: Countries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CountryListResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/reference/timezones:
+    get:
+      tags:
+        - Catalog
+      summary: List timezones
+      description: Returns the curated IANA timezones used to validate and populate `timezone` elsewhere in the API.
+      responses:
+        "200":
+          description: Timezones
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimezoneListResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/application:
+    get:
+      tags:
+        - Instructor Onboarding
+      summary: Get the current instructor onboarding application
+      security:
+        - CookieAuth: []
+      responses:
+        "200":
+          description: Current draft or submitted application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated user is not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/application/basic-info:
+    put:
+      tags:
+        - Instructor Onboarding
+      summary: Save onboarding basic information draft
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BasicInfoRequest"
+      responses:
+        "200":
+          description: Saved application draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application locked for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/application/subjects:
+    put:
+      tags:
+        - Instructor Onboarding
+      summary: Save onboarding subjects draft
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubjectsRequest"
+      responses:
+        "200":
+          description: Saved application draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application locked for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed or invalid topic ids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/application/experience:
+    put:
+      tags:
+        - Instructor Onboarding
+      summary: Save onboarding experience draft
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExperienceRequest"
+      responses:
+        "200":
+          description: Saved application draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application locked for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/application/availability:
+    put:
+      tags:
+        - Instructor Onboarding
+      summary: Save onboarding availability draft
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityRequest"
+      responses:
+        "200":
+          description: Saved application draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application locked for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/application/payout/onboarding-link:
+    post:
+      tags:
+        - Instructor Onboarding
+      summary: Start or resume Stripe Connect Express payout onboarding
+      description: Creates the instructor's Connect Express account on first call (reusing it on subsequent calls) and returns a fresh hosted onboarding link. Onboarding is decoupled from application approval -- it can be started at any time and is independently gated at paid-offering creation.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingLinkRequest"
+      responses:
+        "200":
+          description: Onboarding link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingLinkResponse"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Stripe request failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/webhooks/stripe/connect:
+    post:
+      tags:
+        - Webhooks
+      summary: Stripe Connect account.updated webhook
+      description: Called by Stripe, not by API clients. Verifies the `Stripe-Signature` header against the configured Connect webhook secret, dedupes by event ID, and updates the matching instructor's connect_account_status. Event types other than account.updated are acknowledged as a no-op.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw Stripe event payload; shape is defined by Stripe, not this API.
+      responses:
+        "200":
+          description: Event processed (or ignored, or already seen)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          description: Invalid or unverifiable signature
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error (Stripe should retry)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/instructor/application/submit:
+    post:
+      tags:
+        - Instructor Onboarding
+      summary: Submit the instructor onboarding application
+      description: Submits the current instructor onboarding application into the pending review queue. Applications become locked for further edits as soon as they are submitted (pending), not just once review starts. Requires accepting the current instructor agreement.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitApplicationRequest"
+      responses:
+        "200":
+          description: Submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitApplicationResponse"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an instructor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Duplicate submission or locked for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Required draft data is incomplete, or the instructor agreement was not accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/applications:
+    get:
+      tags:
+        - Admin
+      summary: List instructor applications
+      description: |
+        Returns a paginated list of instructor applications, ordered by `created_at`
+        descending. All filters are optional and combine with AND; omitting `status`
+        returns applications in every status.
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: query
+          name: status
+          description: Filter to a single application status. Omit to return all statuses.
+          schema:
+            type: string
+            enum:
+              - draft
+              - pending
+              - reviewing
+              - approved
+              - rejected
+        - in: query
+          name: created_after
+          description: Only include applications created at or after this instant (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: created_before
+          description: Only include applications created at or before this instant (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: limit
+          description: Number of items to return. Defaults to 20, max 100.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - in: query
+          name: offset
+          description: Number of items to skip.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Paginated list of applications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationSummaryListResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Invalid status filter or date range
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/applications/{id}:
+    get:
+      tags:
+        - Admin
+      summary: Get instructor application by ID
+      description: Returns the full instructor application including all nested data.
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Application UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Full instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/applications/{id}/start-review:
+    post:
+      tags:
+        - Admin
+      summary: Start reviewing a pending application
+      description: Transitions the application from pending to reviewing. Locks the application from instructor edits.
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Application UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Application now under review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application is not in pending status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/applications/{id}/approve:
+    post:
+      tags:
+        - Admin
+      summary: Approve an instructor application
+      description: Transitions the application from reviewing to approved.
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Application UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Application approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application is not in reviewing status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/applications/{id}/reject:
+    post:
+      tags:
+        - Admin
+      summary: Reject an instructor application
+      description: Transitions the application from reviewing to rejected with a reason. The instructor can resubmit later.
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Application UUID.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectApplicationRequest"
+      responses:
+        "200":
+          description: Application rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstructorApplication"
+        "400":
+          description: Invalid JSON or missing reason
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Application is not in reviewing status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/applications/{id}/audit-log:
+    get:
+      tags:
+        - Admin
+      summary: Get audit log for an application
+      description: Returns the full audit trail of admin actions on an application.
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Application UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructors/verified:
+    get:
+      tags:
+        - Instructor Directory
+      summary: List verified instructors
+      description: |
+        Returns a paginated list of approved instructors that learners can explore and book sessions with.
+        Only instructors whose account is active are returned.
+
+        `category_id`, `topic_id`, `language`, and `search` compose with AND semantics and with
+        pagination: the `total` in the response always reflects the fully filtered set,
+        independent of `limit`/`offset`.
+      parameters:
+        - in: query
+          name: limit
+          description: Number of items to return. Defaults to 20, max 100.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - in: query
+          name: offset
+          description: Number of items to skip.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - in: query
+          name: category_id
+          description: Only return instructors offering at least one topic under this category.
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: topic_id
+          description: |
+            Only return instructors who directly offer this topic. If `category_id` is also
+            given, the topic must belong to that category or the request fails with 400 category_topic_mismatch.
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: language
+          description: Only return instructors who teach in this ISO 639-1 language code.
+          schema:
+            type: string
+        - in: query
+          name: search
+          description: Case-insensitive substring match against instructor full name and bio.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated list of verified instructors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifiedInstructorsListResponse"
+        "400":
+          description: Malformed or unknown category_id/topic_id/language, or a category/topic combination that doesn't match.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCategoryId:
+                  summary: Malformed category_id
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: invalid category_id
+                unknownCategory:
+                  summary: category_id does not exist
+                  value:
+                    error:
+                      code: INVALID_CATEGORY
+                      message: unknown category_id
+                unknownTopic:
+                  summary: topic_id does not exist
+                  value:
+                    error:
+                      code: INVALID_TOPIC
+                      message: unknown topic_id
+                unknownLanguage:
+                  summary: language does not exist
+                  value:
+                    error:
+                      code: INVALID_LANGUAGE
+                      message: unknown language
+                categoryTopicMismatch:
+                  summary: topic_id does not belong to category_id
+                  value:
+                    error:
+                      code: CATEGORY_TOPIC_MISMATCH
+                      message: topic does not belong to category
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/availability/template:
+    get:
+      tags:
+        - Instructor Availability
+      summary: Get my availability template
+      description: |
+        Returns the caller's live weekly availability template. Block times are
+        in the instructor's own timezone (see `timezone` on their instructor
+        profile) and on a 30-minute grid. An instructor with no template
+        defined yet returns an empty `blocks` array rather than an error.
+      security:
+        - CookieAuth: []
+      responses:
+        "200":
+          description: The caller's availability template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityTemplateResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+    put:
+      tags:
+        - Instructor Availability
+      summary: Replace my availability template
+      description: |
+        Full-replace: the submitted `blocks` become the entire template.
+        Blocks must be on the 30-minute grid and must not overlap another
+        block on the same weekday within the same submission — if any block
+        fails validation, nothing is written. Saving a new template only
+        affects future slot generation; it never alters already-generated
+        bookable results.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityTemplateRequest"
+      responses:
+        "200":
+          description: The saved availability template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityTemplateResponse"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation failed (off-grid block, or overlapping blocks on the same weekday)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/availability/settings:
+    get:
+      tags:
+        - Instructor Availability
+      summary: Get my availability settings
+      description: |
+        Returns the caller's bookable horizon (how many days ahead learners
+        can book). Defaults to 14 days if the instructor hasn't set one.
+      security:
+        - CookieAuth: []
+      responses:
+        "200":
+          description: The caller's availability settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilitySettingsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+    put:
+      tags:
+        - Instructor Availability
+      summary: Set my bookable horizon
+      description: |
+        Sets how many days ahead learners can book this instructor.
+        `bookable_horizon_days` must be one of 7, 14, or 28. Changing it only
+        affects future slot generation; already-generated bookable results
+        and any existing holds or Booking Slots are untouched.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilitySettingsRequest"
+      responses:
+        "200":
+          description: The saved availability settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilitySettingsResponse"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: bookable_horizon_days is not one of the allowed values (7, 14, 28)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/availability/blocked-dates:
+    get:
+      tags:
+        - Instructor Availability
+      summary: List my blocked dates
+      description: |
+        Returns the caller's blocked dates, ascending. Blocking a date never
+        removes or alters an existing Booking Slot, and never affects a slot
+        currently held by an in-progress checkout — it only excludes that
+        date from future slot generation.
+      security:
+        - CookieAuth: []
+      responses:
+        "200":
+          description: The caller's blocked dates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlockedDatesResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+    post:
+      tags:
+        - Instructor Availability
+      summary: Block a date
+      description: |
+        Blocking the same date twice is safe to retry — it returns the same
+        blocked-date resource rather than erroring.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBlockedDateRequest"
+      responses:
+        "201":
+          description: The blocked date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlockedDate"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: date is not a valid calendar date in YYYY-MM-DD form
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/instructor/availability/blocked-dates/{id}:
+    delete:
+      tags:
+        - Instructor Availability
+      summary: Remove a blocked date
+      security:
+        - CookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          description: Invalid blocked date id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no approved instructor application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Blocked date not found, or does not belong to the caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+  /v1/admin/platform-settings:
+    get:
+      tags:
+        - Admin
+      summary: Get platform settings
+      description: |
+        Admin-only. Returns the single platform-wide settings resource,
+        currently just the minimum notice window applied when computing
+        bookable slots (replaces the old D-2 rule) and reused as the
+        late-cancellation cutoff.
+      security:
+        - CookieAuth: []
+      responses:
+        "200":
+          description: The current platform settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformSettingsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+    put:
+      tags:
+        - Admin
+      summary: Update platform settings
+      description: |
+        Admin-only. Sets `minimum_notice_hours`: a plain instant comparison
+        (`now + minimum_notice_hours <= slot_start_utc`) applied when
+        computing bookable slots, with no calendar-day or timezone logic.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlatformSettingsRequest"
+      responses:
+        "200":
+          description: The saved platform settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformSettingsResponse"
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: minimum_notice_hours must be non-negative
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/RequestTimeoutResponse"
+
+components:
+  securitySchemes:
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: Official product auth mechanism for the web frontend. Cookie is HttpOnly and same-site.
+
+  responses:
+    RequestTimeoutResponse:
+      description: Request timed out before completion.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            timeout:
+              summary: Request timeout
+              value:
+                error:
+                  code: REQUEST_TIMEOUT
+                  message: request timed out
+
+  schemas:
+    AccountType:
+      type: string
+      description: Product persona for a user.
+      enum: [learner, instructor]
+      example: learner
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          description: User email address.
+          example: alice@example.com
+        password:
+          type: string
+          minLength: 8
+          description: Plaintext password (minimum 8 characters).
+          example: correct-horse-battery-staple
+      additionalProperties: false
+
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: One-time verification token.
+          example: "<token>"
+      additionalProperties: false
+
+    ResendVerificationRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email address to send a new verification email to.
+          example: alice@example.com
+      additionalProperties: false
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          minLength: 8
+      additionalProperties: false
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Status indicator.
+          enum: [ok, verification_required]
+          example: ok
+      required: [status]
+      additionalProperties: false
+
+    LoginResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Status indicator.
+          enum: [ok]
+          example: ok
+        verified:
+          type: boolean
+          description: Whether the signed-in user's email is verified.
+          example: true
+        account_type:
+          type: string
+          description: |
+            The signed-in account's persona. Empty string for admin accounts, which have
+            no persona. Lets the frontend redirect to the right destination without a
+            separate `/me` call.
+          enum: ["", learner, instructor]
+          example: learner
+        access_role:
+          type: string
+          description: The signed-in account's privilege level.
+          enum: [user, admin]
+          example: user
+      required: [status, verified, account_type, access_role]
+      additionalProperties: false
+
+    MeResponse:
+      type: object
+      description: Role-agnostic profile for the authenticated user.
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 8f14e45f-ceea-4d7a-bd44-baa3c8dd63f0
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        first_name:
+          type: string
+          example: Alice
+        last_name:
+          type: string
+          example: Nguyen
+        account_type:
+          $ref: "#/components/schemas/AccountType"
+        access_role:
+          type: string
+          description: Privilege level (separate from account_type persona).
+          enum: [user, admin]
+          example: user
+        status:
+          type: string
+          enum: [pending_verification, active, disabled]
+          example: active
+        email_verified:
+          type: boolean
+          example: true
+      required:
+        [
+          id,
+          email,
+          first_name,
+          last_name,
+          account_type,
+          access_role,
+          status,
+          email_verified,
+        ]
+      additionalProperties: false
+
+    UpdateMeRequest:
+      type: object
+      required: [first_name, last_name]
+      properties:
+        first_name:
+          type: string
+          example: Alice
+        last_name:
+          type: string
+          example: Nguyen
+      additionalProperties: false
+
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Status indicator.
+          enum: [ok]
+          example: ok
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            db: ok
+      required: [status, checks]
+      additionalProperties: false
+
+    CategoryListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+
+    Category:
+      type: object
+      required:
+        - id
+        - slug
+        - title
+        - topics
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        title:
+          type: string
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/Topic"
+
+    Topic:
+      type: object
+      required:
+        - id
+        - slug
+        - title
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        title:
+          type: string
+
+    LanguageListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Language"
+
+    Language:
+      type: object
+      required:
+        - alpha2
+        - name
+      properties:
+        alpha2:
+          type: string
+          description: ISO 639-1 language code.
+          example: en
+        name:
+          type: string
+          example: English
+
+    CountryListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Country"
+
+    Country:
+      type: object
+      required:
+        - alpha2
+        - numeric_code
+        - name
+        - dial_codes
+      properties:
+        alpha2:
+          type: string
+          description: ISO 3166-1 alpha-2 country code.
+          example: US
+        numeric_code:
+          type: string
+          description: ISO 3166-1 numeric country code.
+          example: "840"
+        name:
+          type: string
+          example: United States of America
+        dial_codes:
+          type: array
+          description: E.164 dial code(s) for this country. A country may have more than one.
+          items:
+            type: string
+          example: ["+1"]
+
+    TimezoneListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Timezone"
+
+    Timezone:
+      type: object
+      required:
+        - iana_name
+        - utc_offset
+        - display_name
+      properties:
+        iana_name:
+          type: string
+          example: America/New_York
+        utc_offset:
+          type: string
+          example: "UTC-04:00"
+        display_name:
+          type: string
+          example: Eastern Time (US and Canada)
+
+    BasicInfoRequest:
+      type: object
+      properties:
+        current_step:
+          type: integer
+          minimum: 1
+          maximum: 4
+        phone_country_code:
+          type: string
+        phone_number:
+          type: string
+        gender:
+          type: string
+          enum:
+            - male
+            - female
+            - other
+            - prefer_not_to_say
+        date_of_birth:
+          type: string
+          format: date
+        country_of_residence:
+          type: string
+          description: ISO 3166-1 alpha-2 country of residence -- drives legal jurisdiction and the Stripe Connect Express account country.
+        profile_image_url:
+          type: string
+          format: uri
+        intro_video_url:
+          type: string
+          format: uri
+        bio:
+          type: string
+        taught_languages:
+          type: array
+          description: ISO 639-1 alpha-2 codes of the languages the instructor teaches in. Full-replace on save.
+          items:
+            type: string
+      additionalProperties: false
+
+    SubjectsRequest:
+      type: object
+      properties:
+        current_step:
+          type: integer
+          minimum: 1
+          maximum: 4
+        topic_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+      additionalProperties: false
+
+    ExperienceRequest:
+      type: object
+      properties:
+        current_step:
+          type: integer
+          minimum: 1
+          maximum: 4
+        employment:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmploymentItem"
+        education:
+          type: array
+          items:
+            $ref: "#/components/schemas/EducationItem"
+        certificates:
+          type: array
+          items:
+            $ref: "#/components/schemas/CertificateItem"
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectItem"
+      additionalProperties: false
+
+    AvailabilityRequest:
+      type: object
+      properties:
+        current_step:
+          type: integer
+          minimum: 1
+          maximum: 4
+        timezone:
+          type: string
+          example: Asia/Bangkok
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilitySlot"
+      additionalProperties: false
+
+    OnboardingLinkRequest:
+      type: object
+      required:
+        - return_url
+      properties:
+        return_url:
+          type: string
+          format: uri
+          description: Absolute URL the instructor is redirected to after completing (or leaving) Stripe Connect onboarding.
+        refresh_url:
+          type: string
+          format: uri
+          description: Absolute URL the instructor is redirected to if the onboarding link has expired or was already visited. Defaults to return_url if omitted.
+      additionalProperties: false
+
+    OnboardingLinkResponse:
+      type: object
+      required:
+        - onboarding_url
+      properties:
+        onboarding_url:
+          type: string
+          format: uri
+          description: Single-use, short-lived hosted onboarding URL. Request a fresh one for each onboarding attempt.
+      additionalProperties: false
+
+    InstructorApplication:
+      type: object
+      required:
+        - id
+        - user_id
+        - status
+        - current_step
+        - connect_account_status
+        - selected_topic_ids
+        - taught_languages
+        - employment
+        - education
+        - certificates
+        - projects
+        - availability
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - draft
+            - pending
+            - reviewing
+            - approved
+            - rejected
+        current_step:
+          type: integer
+        first_name:
+          type: string
+        last_name:
+          type: string
+        phone_country_code:
+          type: string
+        phone_number:
+          type: string
+        gender:
+          type: string
+          nullable: true
+        date_of_birth:
+          type: string
+          format: date
+          nullable: true
+        country_of_residence:
+          type: string
+        profile_image_url:
+          type: string
+        intro_video_url:
+          type: string
+        bio:
+          type: string
+        timezone:
+          type: string
+        stripe_connect_account_id:
+          type: string
+          nullable: true
+          description: Stripe Connect Express account ID. Internal identifier only -- never surface "Stripe" or "connect account" in instructor-facing UI copy.
+        connect_account_status:
+          type: string
+          enum:
+            - unverified
+            - pending
+            - verified
+            - rejected
+          description: Payout method verification state, tracked separately from application approval status.
+        selected_topic_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        taught_languages:
+          type: array
+          items:
+            type: string
+        employment:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmploymentItemResponse"
+        education:
+          type: array
+          items:
+            $ref: "#/components/schemas/EducationItemResponse"
+        certificates:
+          type: array
+          items:
+            $ref: "#/components/schemas/CertificateItemResponse"
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectItemResponse"
+        availability:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilitySlotResponse"
+        submitted_at:
+          type: string
+          format: date-time
+          nullable: true
+        review_started_at:
+          type: string
+          format: date-time
+          nullable: true
+        terms_version:
+          type: string
+          nullable: true
+          description: Identifier of the instructor agreement version accepted at submission. Null until the application has been submitted at least once.
+        terms_accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SubmitApplicationRequest:
+      type: object
+      required:
+        - accept_terms
+      properties:
+        accept_terms:
+          type: boolean
+          description: Must be true. Confirms the instructor accepts the current instructor agreement, including the liability and mandatory-refund clause for fraudulent supporting documents.
+      additionalProperties: false
+
+    SubmitApplicationResponse:
+      type: object
+      required:
+        - status
+        - message
+        - application
+      properties:
+        status:
+          type: string
+          enum:
+            - pending
+        message:
+          type: string
+        application:
+          $ref: "#/components/schemas/InstructorApplication"
+
+    EmploymentItem:
+      type: object
+      required:
+        - company_name
+        - current_position
+        - working_duration_months
+        - is_current_role
+      properties:
+        company_name:
+          type: string
+        current_position:
+          type: string
+        working_duration_months:
+          type: integer
+          minimum: 0
+        is_current_role:
+          type: boolean
+      additionalProperties: false
+
+    EducationItem:
+      type: object
+      required:
+        - university_name
+        - degree_type
+      properties:
+        university_name:
+          type: string
+        degree_type:
+          type: string
+        issued_date:
+          type: string
+          format: date
+          nullable: true
+        supporting_document_url:
+          type: string
+          format: uri
+      additionalProperties: false
+
+    CertificateItem:
+      type: object
+      required:
+        - certificate_name
+      properties:
+        certificate_name:
+          type: string
+        issued_date:
+          type: string
+          format: date
+          nullable: true
+        supporting_document_url:
+          type: string
+          format: uri
+      additionalProperties: false
+
+    ProjectItem:
+      type: object
+      required:
+        - project_title
+        - description
+      properties:
+        project_title:
+          type: string
+        description:
+          type: string
+        showcase_url:
+          type: string
+          format: uri
+      additionalProperties: false
+
+    AvailabilitySlot:
+      type: object
+      required:
+        - weekday
+        - start_minute
+        - end_minute
+      properties:
+        weekday:
+          type: integer
+          minimum: 0
+          maximum: 6
+        start_minute:
+          type: integer
+          minimum: 0
+          maximum: 1410
+        end_minute:
+          type: integer
+          minimum: 30
+          maximum: 1440
+      additionalProperties: false
+
+    AvailabilityTemplateRequest:
+      type: object
+      required:
+        - blocks
+      properties:
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilitySlot"
+      additionalProperties: false
+
+    AvailabilityTemplateBlock:
+      allOf:
+        - $ref: "#/components/schemas/AvailabilitySlot"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    AvailabilityTemplateResponse:
+      type: object
+      required:
+        - blocks
+      properties:
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilityTemplateBlock"
+
+    AvailabilitySettingsRequest:
+      type: object
+      required:
+        - bookable_horizon_days
+      properties:
+        bookable_horizon_days:
+          type: integer
+          enum: [7, 14, 28]
+      additionalProperties: false
+
+    AvailabilitySettingsResponse:
+      type: object
+      required:
+        - bookable_horizon_days
+      properties:
+        bookable_horizon_days:
+          type: integer
+          enum: [7, 14, 28]
+
+    CreateBlockedDateRequest:
+      type: object
+      required:
+        - date
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-08-01"
+      additionalProperties: false
+
+    BlockedDate:
+      type: object
+      required:
+        - id
+        - date
+      properties:
+        id:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+
+    BlockedDatesResponse:
+      type: object
+      required:
+        - blocked_dates
+      properties:
+        blocked_dates:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockedDate"
+
+    PlatformSettingsRequest:
+      type: object
+      required:
+        - minimum_notice_hours
+      properties:
+        minimum_notice_hours:
+          type: integer
+          minimum: 0
+          example: 24
+      additionalProperties: false
+
+    PlatformSettingsResponse:
+      type: object
+      required:
+        - minimum_notice_hours
+        - updated_at
+      properties:
+        minimum_notice_hours:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    EmploymentItemResponse:
+      allOf:
+        - $ref: "#/components/schemas/EmploymentItem"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    EducationItemResponse:
+      allOf:
+        - $ref: "#/components/schemas/EducationItem"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    CertificateItemResponse:
+      allOf:
+        - $ref: "#/components/schemas/CertificateItem"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    ProjectItemResponse:
+      allOf:
+        - $ref: "#/components/schemas/ProjectItem"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    AvailabilitySlotResponse:
+      allOf:
+        - $ref: "#/components/schemas/AvailabilitySlot"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+          example: INVALID_JSON
+        message:
+          type: string
+          description: Human-readable error message.
+          example: invalid json
+        details:
+          type: object
+          description: Optional machine-readable error details.
+          additionalProperties: true
+          example:
+            field: date_of_birth
+      required: [code, message]
+      additionalProperties: false
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+      required: [error]
+      additionalProperties: false
+
+    ApplicationSummary:
+      type: object
+      required:
+        - id
+        - user_id
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - draft
+            - pending
+            - reviewing
+            - approved
+            - rejected
+        first_name:
+          type: string
+        last_name:
+          type: string
+        submitted_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ApplicationSummaryListResponse:
+      type: object
+      required:
+        - items
+        - limit
+        - offset
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApplicationSummary"
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+
+    VerifiedInstructor:
+      type: object
+      required:
+        - id
+        - first_name
+        - last_name
+        - bio
+        - profile_image_url
+        - timezone
+        - selected_topic_ids
+      properties:
+        id:
+          type: string
+          format: uuid
+        first_name:
+          type: string
+        last_name:
+          type: string
+        bio:
+          type: string
+        profile_image_url:
+          type: string
+        timezone:
+          type: string
+        selected_topic_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    VerifiedInstructorsListResponse:
+      type: object
+      required:
+        - items
+        - limit
+        - offset
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VerifiedInstructor"
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+
+    RejectApplicationRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Reason for rejecting the application.
+      additionalProperties: false
+
+    AuditLogEntry:
+      type: object
+      required:
+        - id
+        - action
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        admin_id:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+          enum:
+            - review_started
+            - approved
+            - rejected
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    AuditLogResponse:
+      type: object
+      required:
+        - entries
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogEntry"

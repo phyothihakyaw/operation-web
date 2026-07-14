@@ -15,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { login } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
 import { isApiConfigured } from "@/lib/api/config";
+import { useAuth } from "@/lib/auth/auth-context";
 
 const formSchema = z.object({
   email: z.email({ message: "Please enter a valid email address." }),
@@ -24,6 +25,7 @@ const formSchema = z.object({
 
 export function LoginForm() {
   const router = useRouter();
+  const { refresh } = useAuth();
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -36,16 +38,17 @@ export function LoginForm() {
   async function onSubmit(data: z.infer<typeof formSchema>) {
     if (!isApiConfigured) {
       toast("Signed in with sample data", {
-        description: "Set NEXT_PUBLIC_API_URL to authenticate against the LearnWU API.",
+        description: "Set NEXT_PUBLIC_API_URL to authenticate against the Learnwu API.",
       });
-      router.push("/dashboard/mentors");
+      router.push("/dashboard");
       return;
     }
 
     try {
-      const { user } = await login({ email: data.email, password: data.password });
-      toast.success(`Welcome back${user?.name ? `, ${user.name}` : ""}!`);
-      router.push("/dashboard/mentors");
+      await login({ email: data.email, password: data.password });
+      await refresh();
+      toast.success("Welcome back!");
+      router.push("/dashboard");
     } catch (error) {
       const description = error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
       toast.error("Login failed", { description });

@@ -2,7 +2,17 @@
 
 ## Project overview
 
-Studio Admin is a responsive admin dashboard built with Next.js 16, React 19, TypeScript, Tailwind CSS v4, and shadcn/ui.
+Learnwu Backoffice is the operations dashboard for the Learnwu platform (mentor vetting, platform settings), built with Next.js 16, React 19, TypeScript, Tailwind CSS v4, and shadcn/ui on the Studio Admin template.
+
+## Domain copy
+
+- **UI copy says "mentor", never "instructor".** The backend API's domain term is `instructor` (endpoints, JSON fields, `account_type` values) — keep those spellings in wire types and `src/lib/api/`, and translate to "mentor" in everything user-visible: labels, headings, toasts, empty states, aria-labels.
+- **The platform's name is written "Learnwu"** — capital L only. Never "LearnWU", "Learn WU", or "LearnWu".
+- Error messages from the API error envelope are written as UI copy — surface `error.message` verbatim rather than rewording it.
+
+## Live data only
+
+The live screens (mentor vetting, settings, auth) integrate with the Learnwu API via `src/lib/api/` and must not fall back to mock/sample data. Template demo pages under `src/app/(main)/dashboard/` keep their local mock data but stay hidden from the sidebar; features without a backing API endpoint are hidden (flag or comment), not shipped with fake data.
 
 This repository uses the shadcn `radix-nova` style. The shadcn CLI reports `base: "radix"`, which refers to Radix UI. Always inspect the local components in `src/components/ui/` because individual wrappers may use different primitives.
 

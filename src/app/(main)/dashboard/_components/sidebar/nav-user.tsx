@@ -1,7 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-
 import { CircleUser, CreditCard, EllipsisVertical, LogOut, MessageSquareDot } from "lucide-react";
 import { toast } from "sonner";
 
@@ -16,8 +14,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
-import { logout } from "@/lib/api/auth";
+import { useAuth } from "@/lib/auth/auth-context";
 import { getInitials } from "@/lib/utils";
+
+// Account/Billing/Notifications have no backing features yet — hidden, not removed, until they ship.
+const SHOW_ACCOUNT_MENU_ITEMS: boolean = false;
 
 export function NavUser({
   user,
@@ -29,12 +30,11 @@ export function NavUser({
   };
 }) {
   const { isMobile } = useSidebar();
-  const router = useRouter();
+  const { signOut } = useAuth();
 
   async function handleLogout() {
-    await logout();
+    await signOut();
     toast("You have been signed out");
-    router.push("/auth/v1/login");
   }
 
   return (
@@ -76,21 +76,25 @@ export function NavUser({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem>
-                <CircleUser />
-                Account
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <CreditCard />
-                Billing
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <MessageSquareDot />
-                Notifications
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
+            {SHOW_ACCOUNT_MENU_ITEMS && (
+              <>
+                <DropdownMenuGroup>
+                  <DropdownMenuItem>
+                    <CircleUser />
+                    Account
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <CreditCard />
+                    Billing
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <MessageSquareDot />
+                    Notifications
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem onSelect={handleLogout}>
               <LogOut />
               Log out

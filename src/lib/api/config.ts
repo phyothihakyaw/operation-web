@@ -1,5 +1,5 @@
 /**
- * Base URL the browser uses for LearnWU API calls, via NEXT_PUBLIC_API_URL
+ * Base URL the browser uses for Learnwu API calls, via NEXT_PUBLIC_API_URL
  * (see .env.example). Two modes:
  *
  * - "/api/learnwu" (recommended): same-origin proxy. Requests go to this app's
@@ -7,29 +7,34 @@
  *   server-side to API_PROXY_TARGET — no CORS involvement at all.
  * - "https://api.dev.learnwu.com": direct mode; only works if the API's CORS
  *   policy allows the frontend origin.
- *
- * When unset, the app falls back to built-in sample data and auth is skipped.
  */
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "");
 
 export const isApiConfigured = API_BASE_URL.length > 0;
 
 /**
- * Every backend path the app talks to, in one place.
- *
- * NOTE: the swagger doc (https://api.dev.learnwu.com/docs) is not reachable
- * from the development sandbox, so these paths follow common REST conventions.
- * Verify each one against the swagger doc and adjust here only.
+ * Every backend path the app talks to, in one place. Paths mirror openapi.yaml
+ * and are relative to NEXT_PUBLIC_API_URL, which already includes the `/v1`
+ * prefix (see .env.example).
  */
 export const apiRoutes = {
   auth: {
-    login: "/auth/login",
+    // The backoffice only ever signs in through the admin persona.
+    // Learner/mentor accounts use POST /v1/auth/login instead.
+    loginAdmin: "/auth/login/admin",
     logout: "/auth/logout",
     me: "/auth/me",
   },
-  instructors: {
-    applications: "/instructors/applications",
-    application: (id: string) => `/instructors/applications/${id}`,
-    review: (id: string) => `/instructors/applications/${id}/review`,
+  admin: {
+    applications: "/admin/applications",
+    application: (id: string) => `/admin/applications/${id}`,
+    applicationStartReview: (id: string) => `/admin/applications/${id}/start-review`,
+    applicationApprove: (id: string) => `/admin/applications/${id}/approve`,
+    applicationReject: (id: string) => `/admin/applications/${id}/reject`,
+    applicationAuditLog: (id: string) => `/admin/applications/${id}/audit-log`,
+    platformSettings: "/admin/platform-settings",
+  },
+  catalog: {
+    categories: "/catalog/categories",
   },
 } as const;
